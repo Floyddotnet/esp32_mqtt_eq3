@@ -765,13 +765,25 @@ int handle_request(char *cmdstr){
             cmdparms[0] = (unsigned char)(inttemp << 1);
             if(temp - (float)inttemp >= 0.5)
                 cmdparms[0] |= 0x01;
-        }else{
+	    }else{
             ESP_LOGI(GATTC_TAG, "Invalid temperature %0.1f requested", temp);
             //free(newcmd);
             return -1;
         }
     }
-
+    if(strncmp((const char *)cmdptr, "off", 3) == 0){
+        /* 'Off' is achieved by setting the required temperature to 4.5 */
+        start = true;
+        command = EQ3_SETTEMP;
+        cmdparms[0] = 0x09; /* (4 << 1) | 0x01 */
+    }
+    if(strncmp((const char *)cmdptr, "on", 2) == 0){
+        /* 'On' is achieved by setting the required temperature to 30 */
+        start = true;
+        command = EQ3_SETTEMP;
+        cmdparms[0] = 0x3c; /* (30 << 1) */
+    }
+    
     if(start == true){
         int parm;
 
@@ -796,22 +808,22 @@ int handle_request(char *cmdstr){
 
         ESP_LOGI(GATTC_TAG, "Requested address:");
         esp_log_buffer_hex(GATTC_TAG, newcmd->bleda, sizeof(esp_bd_addr_t));
-
+	
         newcmd->next = NULL;
-
+    
         struct eq3cmd *qwalk = cmdqueue;
         if(cmdqueue == NULL){
             cmdqueue = newcmd;
-            ESP_LOGI(GATTC_TAG, "Add queue head");
-        }else{
-            while(qwalk->next != NULL)
-                qwalk = qwalk->next;
-            qwalk->next = newcmd;
-            ESP_LOGI(GATTC_TAG, "Add queue end");
-        }
-        if(timer_running() == true)
-            ESP_LOGI(GATTC_TAG, "Timer still running!!??");
-        runtimer();
+	    ESP_LOGI(GATTC_TAG, "Add queue head");
+	}else{
+	    while(qwalk->next != NULL)
+	        qwalk = qwalk->next;
+	    qwalk->next = newcmd;
+	   ESP_LOGI(GATTC_TAG, "Add queue end");
+	}
+	if(timer_running() == true)
+	    ESP_LOGI(GATTC_TAG, "Timer still running!!??");
+		runtimer();
     }
     else{
         ESP_LOGI(GATTC_TAG, "Invalid command %s", cmdptr);

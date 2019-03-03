@@ -89,6 +89,10 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 static char intopicbase[30];
 static char outtopicbase[30];
 
+bool ismqttconnected(void){
+    return repclient == NULL ? false : true;
+}
+
 /* MQTT connected callback */
 static void connected_cb(esp_mqtt_event_handle_t event){
     esp_log_level_set("MQTT_CLIENT", ESP_LOG_VERBOSE);
