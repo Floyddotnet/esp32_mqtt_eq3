@@ -572,6 +572,7 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
         get_server = false;
         ESP_LOGI(GATTC_TAG, "ESP_GATTC_DISCONNECT_EVT, status = %d", p_data->disconnect.reason);
         //esp_ble_gattc_app_unregister(gl_profile_tab[PROFILE_A_APP_ID].gattc_if);
+        ble_operation_in_progress = false;
         break;
     default:
         ESP_LOGI(GATTC_TAG, "Unhandled_EVT %d", event);
@@ -1124,7 +1125,7 @@ void app_main(){
 	
 	    /* Timer message handling */
 	    if(xQueueReceive(timer_queue, &evt, 0)){
-            ESP_LOGI(GATTC_TAG, "Timer0 event");
+            ESP_LOGI(GATTC_TAG, "Timer0 event (nextcmd.running=%d, ble_operation_in_progress=%d)", nextcmd.running, ble_operation_in_progress);
             outstanding_timer = false;
             
             if(nextcmd.running == true){
@@ -1137,7 +1138,6 @@ void app_main(){
                                 esp_ble_gattc_close (gl_profile_tab[PROFILE_A_APP_ID].gattc_if, gl_profile_tab[PROFILE_A_APP_ID].conn_id);
                             }
                             runtimer();
-                            ble_operation_in_progress = false;
                             break;
                         case START_WIFI:
                             ESP_LOGI(GATTC_TAG, "Init wifi");
