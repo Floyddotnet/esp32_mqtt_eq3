@@ -49,6 +49,7 @@
 #include "eq3_bootwifi.h"
 #include "eq3_device.h"
 #include "eq3_device_id.h"
+#include "eq3_commandqueue.h"
 #include "eq3_uart.h"
 
 #define GATTC_TAG "EQ3_MAIN"
@@ -58,40 +59,12 @@
 #define START_WIFI     1
 #define RESTART_WIFI   2
 
-/* Allow delay of next GATTC command */
-struct tmrcmd{
-    bool running;
-    int cmd;
-    int countdown;
-};
-
 bool wifistartdelay = true;
 
-struct tmrcmd nextcmd;
 
-int setnextcmd(int cmd, int time_s){
-    if(nextcmd.running != true){
-        nextcmd.cmd = cmd;
-        nextcmd.countdown = time_s;
-        nextcmd.running = true;
-    }else{
-        ESP_LOGI(GATTC_TAG, "setnextcmd when timer running!");
-    }
-    return 0;
-}
 
 static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param);
 static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param);
-
-
-#define EQ3_CMD_DONE    0
-#define EQ3_CMD_RETRY   1
-#define EQ3_CMD_FAILED  2
-/* Command complete success/fail acknowledgement */
-static int command_complete(bool success);
-
-/* Current TRV command being sent to EQ-3 */ 
-struct eq3trvCmd *trvCmd;
 
 static bool get_server = false;
 static bool connection_open = false;
@@ -555,9 +528,6 @@ QueueHandle_t msgQueue = NULL;
 QueueHandle_t timer_queue = NULL;
 
 
-static void enqueue_command(struct eq3cmd *newcmd);
-
-struct eq3cmd *cmdqueue = NULL;
 
 /* Handle an EQ-3 command from uart or mqtt */
 int handle_request(char *cmdstr){
@@ -706,92 +676,7 @@ int handle_request(char *cmdstr){
     return 0;
 }
 
-static void enqueue_command(struct eq3cmd *newcmd)
-{
-    struct eq3cmd *qwalk = cmdqueue;
-    struct eq3cmd *lastCommandForDevice = NULL;
 
-    if(cmdqueue == NULL)
-    {
-        cmdqueue = newcmd;
-        ESP_LOGI(GATTC_TAG, "Add queue head");
-    }
-    else
-    {
-        if(memcmp(qwalk->bleda, newcmd->bleda, sizeof(esp_bd_addr_t)) == 0)
-            lastCommandForDevice = qwalk;
-
-        while(qwalk->next != NULL)
-        {
-            qwalk = qwalk->next;
-            if(memcmp(qwalk->bleda, newcmd->bleda, sizeof(esp_bd_addr_t)) == 0)
-                lastCommandForDevice = qwalk;
-        }
-
-        //don't add the same command again if it already is the last command for a specific device
-        if(lastCommandForDevice != NULL
-                && lastCommandForDevice->cmd == newcmd->cmd
-                && memcmp(lastCommandForDevice->cmdparms, newcmd->cmdparms, MAX_CMD_BYTES) == 0)
-        {
-            ESP_LOGI(GATTC_TAG, "Command still pending");
-            return;
-        }
-
-        qwalk->next = newcmd;
-        ESP_LOGI(GATTC_TAG, "Add queue end");
-     }
-}
-
-#define REQUEUE_RETRY
-
-static int command_complete(bool success){
-    bool deletehead = false;
-    int rc = EQ3_CMD_RETRY;
-
-    if(success == true){
-        deletehead = true;
-        rc = EQ3_CMD_DONE;
-    }
-    else if(cmdqueue == NULL) {
-        rc = EQ3_CMD_DONE;
-    }
-    else{
-        /* Command failed - retry if there are any retries left */
-        
-        /* Normal operation - retry the same command until all attempts are exhausted 
-         * OR
-         * define REQUEUE_RETRY to push the command to the end of the list to retry once all other currently queued commands are complete. */        
-        if(--cmdqueue->retries <= 0){
-            deletehead = true;
-            ESP_LOGE(GATTC_TAG, "Command failed - retries exhausted");
-            rc = EQ3_CMD_FAILED;
-        }else{
-#ifdef REQUEUE_RETRY
-            ESP_LOGE(GATTC_TAG, "Command failed - requeue for retry");
-            /* If there are no other queued commands just retry this one */
-            if(cmdqueue->next != NULL){
-                struct eq3cmd *mvcmd = cmdqueue;
-                while(mvcmd->next != NULL)
-	                mvcmd = mvcmd->next;
-                /* Attach head to tail */
-                mvcmd->next = cmdqueue;
-                cmdqueue = cmdqueue->next;
-                /* Detach head from new tail */
-                mvcmd->next->next = NULL;
-            }
-#else
-            ESP_LOGE(GATTC_TAG, "Command failed - retry");
-#endif  
-        }
-    }
-    if(deletehead && cmdqueue != NULL){
-        /* Delete this command from the queue */
-        struct eq3cmd *delcmd = cmdqueue;
-	    cmdqueue = cmdqueue->next;
-	    free(delcmd);
-    }
-    return rc;
-}
 
 /* Run the next EQ-3 command from the list */
 static int run_command(void){
