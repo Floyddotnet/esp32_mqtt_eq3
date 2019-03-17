@@ -1,5 +1,12 @@
 
 #ifndef EQ3_GAP_H
+#define EQ3_GAP_H
+
+/* Address types */
+#define BLE_ADDR_PUBLIC         0x00
+#define BLE_ADDR_RANDOM         0x01
+#define BLE_ADDR_PUBLIC_ID      0x02
+#define BLE_ADDR_TYPE_MASK      (BLE_ADDR_RANDOM | BLE_ADDR_PUBLIC)
 
 /* Device list handling */
 struct found_device {

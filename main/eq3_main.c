@@ -1,21 +1,21 @@
-/****************************************************************************
- *
- * EQ-3 Thermostatic Radiator Valve control
- *
- ****************************************************************************/
-
-/* by Paul Tupper (C) 2017
- * derived from gatt_client example from Espressif Systems
- *
- * updated by Peter Becker (C) 2019
- */
-
+// ****************************************************************************
+//
+// EQ-3 Thermostatic Radiator Valve control
+//
+// ****************************************************************************
+//
+// by Paul Tupper (C) 2017
+//  derived from gatt_client example from Espressif Systems
+//
+// updated by Peter Becker (C) 2019
+//
+//
 // Copyright 2015-2017 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-
+//
 //     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
@@ -39,6 +39,7 @@
 #include "esp_gap_ble_api.h"
 #include "esp_gattc_api.h"
 #include "esp_gatt_defs.h"
+#include "esp_bt_defs.h"
 #include "esp_bt_main.h"
 
 #include "eq3_gap.h"
@@ -46,6 +47,8 @@
 #include "eq3_wifi.h"
 
 #include "eq3_bootwifi.h"
+#include "eq3_device.h"
+#include "eq3_device_id.h"
 
 #define GATTC_TAG "EQ3_MAIN"
 #define INVALID_HANDLE   0
@@ -53,34 +56,6 @@
 #define EQ3_DISCONNECT 0
 #define START_WIFI     1
 #define RESTART_WIFI   2
-
-/* Request ids for TRV */
-#define PROP_ID_QUERY            0x00
-#define PROP_ID_RETURN           0x01
-#define PROP_INFO_RETURN         0x02
-#define PROP_INFO_QUERY          0x03
-#define PROP_COMFORT_ECO_CONFIG  0x11
-#define PROP_OFFSET              0x13
-#define PROP_WINDOW_OPEN_CONFIG  0x14
-#define PROP_SCHEDULE_QUERY      0x20
-#define PROP_SCHEDULE_RETURN     0x21
-#define PROP_MODE_WRITE          0x40
-#define PROP_TEMPERATURE_WRITE   0x41
-#define PROP_COMFORT             0x43
-#define PROP_ECO                 0x44
-#define PROP_BOOST               0x45
-#define PROP_LOCK                0x80
-
-/* Status bits */
-#define AUTO                     0x00
-#define MANUAL                   0x01
-#define AWAY                     0x02
-#define BOOST                    0x04
-#define DST                      0x08
-#define WINDOW                   0x10
-#define LOCKED                   0x20
-#define UNKNOWN                  0x40
-#define LOW_BATTERY              0x80
 
 /* Allow delay of next GATTC command */
 struct tmrcmd{
@@ -114,50 +89,8 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
 /* Command complete success/fail acknowledgement */
 static int command_complete(bool success);
 
-/* EQ-3 service identifier */
-static esp_gatt_srvc_id_t eq3_service_id = {
-        .id = {
-                .uuid = {
-                        .len = ESP_UUID_LEN_128,
-                        .uuid = {.uuid128 = {0x46, 0x70, 0xb7, 0x5b, 0xff, 0xa6, 0x4a, 0x13, 0x90, 0x90, 0x4f, 0x65, 0x42, 0x51, 0x13, 0x3e},},
-                },
-                .inst_id = 0,
-        },
-        .is_primary = true,
-};
-
-/* EQ-3 characteristic identifier for setting parameters */
-static esp_gatt_id_t eq3_char_id = {
-        .uuid = {
-                .len = ESP_UUID_LEN_128,
-                .uuid = {.uuid128 = {0x09, 0xea, 0x79, 0x81, 0xdf, 0xb8, 0x4b, 0xdb, 0xad, 0x3b, 0x4a, 0xce, 0x5a, 0x58, 0xa4, 0x3f},},
-        },
-        .inst_id = 0,
-};
-
-static esp_bt_uuid_t eq3_filter_char_uuid = {
-        .len = ESP_UUID_LEN_128,
-        .uuid = {.uuid128 = {0x09, 0xea, 0x79, 0x81, 0xdf, 0xb8, 0x4b, 0xdb, 0xad, 0x3b, 0x4a, 0xce, 0x5a, 0x58, 0xa4, 0x3f},},
-};
-
-/* EQ-3 characteristic used to notify settings from trv in response to parameter set */
-static esp_gatt_id_t eq3_resp_char_id = {
-        .uuid = {
-                .len = ESP_UUID_LEN_128,
-                .uuid = {.uuid128 = {0x2a, 0xeb, 0xe0, 0xf4, 0x90, 0x6c, 0x41, 0xaf, 0x96, 0x09, 0x29, 0xcd, 0x4d, 0x43, 0xe8, 0xd0},},
-        },
-        .inst_id = 0,
-};
-
-static esp_bt_uuid_t eq3_resp_filter_char_uuid = {
-        .len = ESP_UUID_LEN_128,
-        .uuid = {.uuid128 = {0x2a, 0xeb, 0xe0, 0xf4, 0x90, 0x6c, 0x41, 0xaf, 0x96, 0x09, 0x29, 0xcd, 0x4d, 0x43, 0xe8, 0xd0},},
-};
-
 /* Current TRV command being sent to EQ-3 */ 
-uint16_t cmd_len = 0;
-uint8_t cmd_val[20] = {0};
-esp_bd_addr_t cmd_bleda;   /* BLE Device Address */
+struct eq3trvCmd *trvCmd;
 
 static bool get_server = false;
 static bool connection_open = false;
@@ -267,7 +200,7 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
         /* Profile connection opened */
         if (param->open.status != ESP_GATT_OK){
             ESP_LOGE(GATTC_TAG, "open failed, status %d", p_data->open.status); 
-            gattc_command_error(cmd_bleda, "TRV not available");
+            gattc_command_error(trvCmd->cmd_bleda, "TRV not available");
             break;
         }else{
             ESP_LOGI(GATTC_TAG, "open success");
@@ -366,7 +299,7 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
                                     break;
                                 }
                             }
-                            if(checkcount == ESP_UUID_LEN_128 && char_elem_result[charwalk].properties & ESP_GATT_CHAR_PROP_BIT_NOTIFY) {
+                            if(checkcount == ESP_UUID_LEN_128 && (char_elem_result[charwalk].properties & ESP_GATT_CHAR_PROP_BIT_NOTIFY)) {
                                 ESP_LOGI(GATTC_TAG, "eq-3 got resp id handle");
                                 gl_profile_tab[PROFILE_A_APP_ID].resp_char_handle = char_elem_result[charwalk].char_handle;
                                 continue;
@@ -442,7 +375,7 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
             /* Now we're ready to send our command to the EQ-3 trv */
             ESP_LOGI(GATTC_TAG, "Send eq3 command");
             esp_ble_gattc_write_char( gattc_if, gl_profile_tab[PROFILE_A_APP_ID].conn_id, gl_profile_tab[PROFILE_A_APP_ID].char_handle,
-                    cmd_len, cmd_val, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+                    trvCmd->cmd_len, trvCmd->cmd_val, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
         }
         break;
     }
@@ -612,34 +545,14 @@ static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp
 
 #define BUF_SIZE (1024)
 
-#define MAX_CMD_BYTES 6
-#define SET_TIME_BYTES 6
+
+
 #define MAX_CMD_RETRIES 3
 
 /* Message queue of EQ-3 messages */
 QueueHandle_t msgQueue = NULL;
 QueueHandle_t timer_queue = NULL;
 
-typedef enum {
-    EQ3_BOOST = 0,
-    EQ3_UNBOOST,
-    EQ3_AUTO,
-    EQ3_MANUAL,
-    EQ3_ECO,
-    EQ3_SETTEMP,
-    EQ3_OFFSET,
-    EQ3_SETTIME,
-    EQ3_LOCK,
-    EQ3_UNLOCK,
-}eq3_bt_cmd;
-
-struct eq3cmd{
-    esp_bd_addr_t bleda;
-    eq3_bt_cmd cmd;
-    unsigned char cmdparms[MAX_CMD_BYTES];
-    int retries;
-    struct eq3cmd *next;
-};
 
 static void enqueue_command(struct eq3cmd *newcmd);
 
@@ -883,69 +796,6 @@ static void enqueue_command(struct eq3cmd *newcmd)
      }
 }
 
-/* Get the next command off the queue and encode the characteristic parameters */
-static int setup_command(void){
-    if(cmdqueue != NULL){
-        int parm;
-        switch(cmdqueue->cmd){
-        case EQ3_SETTIME:
-            cmd_val[0] = PROP_INFO_QUERY;
-            for(parm=0; parm < SET_TIME_BYTES; parm++)
-                cmd_val[1 + parm] = cmdqueue->cmdparms[parm];
-            cmd_len = 1 + SET_TIME_BYTES;
-            break;
-        case EQ3_BOOST:
-            cmd_val[0] = PROP_BOOST;
-            cmd_val[1] = 0x01;
-            cmd_len = 2;
-            break;
-        case EQ3_UNBOOST:
-            cmd_val[0] = PROP_BOOST;
-            cmd_val[1] = 0x00;
-            cmd_len = 2;
-            break;
-        case EQ3_AUTO:
-            cmd_val[0] = PROP_MODE_WRITE;
-            cmd_val[1] = 0x00;
-            cmd_len = 2;
-            break;
-        case EQ3_MANUAL:
-            cmd_val[0] = PROP_MODE_WRITE;
-            cmd_val[1] = 0x40;
-            cmd_len = 2;
-            break;
-        case EQ3_SETTEMP:
-            cmd_val[0] = PROP_TEMPERATURE_WRITE;
-            cmd_val[1] = cmdqueue->cmdparms[0];
-            cmd_len = 2;
-            break;
-        case EQ3_OFFSET:
-            cmd_val[0] = PROP_OFFSET;
-            cmd_val[1] = cmdqueue->cmdparms[0];
-            cmd_len = 2;
-            break;
-        case EQ3_LOCK:
-            cmd_val[0] = PROP_LOCK;
-            cmd_val[1] = 1;
-            cmd_len = 2;
-            break;
-        case EQ3_UNLOCK:
-            cmd_val[0] = PROP_LOCK;
-            cmd_val[1] = 0;
-            cmd_len = 2;
-            break;
-        default:
-            ESP_LOGI(GATTC_TAG, "Can't handle that command yet");
-            break;
-        }
-        memcpy(cmd_bleda, cmdqueue->bleda, sizeof(esp_bd_addr_t));
-        //struct eq3cmd *delcmd = cmdqueue;
-        //cmdqueue = cmdqueue->next;
-        //free(delcmd);
-    }
-    return 0;
-}
-
 #define REQUEUE_RETRY
 
 static int command_complete(bool success){
@@ -999,20 +849,16 @@ static int command_complete(bool success){
 
 /* Run the next EQ-3 command from the list */
 static int run_command(void){
+    if(trvCmd == NULL)
+        trvCmd = malloc(sizeof(struct eq3trvCmd));
+
     if(cmdqueue != NULL){
         ESP_LOGI(GATTC_TAG, "Sending next command");
-        setup_command();
+        setup_command(cmdqueue, trvCmd);
         ESP_LOGI(GATTC_TAG, "Open virtual server connection for BLE device:");
-        esp_log_buffer_hex(GATTC_TAG, cmd_bleda, sizeof(esp_bd_addr_t));
+        esp_log_buffer_hex(GATTC_TAG, trvCmd->cmd_bleda, sizeof(esp_bd_addr_t));
         ble_operation_in_progress = true;
-        esp_ble_gattc_open(gl_profile_tab[PROFILE_A_APP_ID].gattc_if, cmd_bleda, 0x00, true);
-        /*
-		#define BLE_ADDR_PUBLIC         0x00
-		#define BLE_ADDR_RANDOM         0x01
-		#define BLE_ADDR_PUBLIC_ID      0x02
-		#define BLE_ADDR_RANDOM_ID      0x03
-         */
-        //TODO: BLE_ADDR_PUBLIC Verify https://github.com/espressif/esp-idf/blob/a0468b2bd64c48d093309a4b3d623a7343c205c0/components/bt/bluedroid/stack/include/stack/bt_types.h
+        esp_ble_gattc_open(gl_profile_tab[PROFILE_A_APP_ID].gattc_if, trvCmd->cmd_bleda, BLE_ADDR_PUBLIC, true);
     }
     return 0;
 }
