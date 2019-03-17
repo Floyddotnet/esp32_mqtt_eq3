@@ -49,6 +49,7 @@
 #include "eq3_bootwifi.h"
 #include "eq3_device.h"
 #include "eq3_device_id.h"
+#include "eq3_uart.h"
 
 #define GATTC_TAG "EQ3_MAIN"
 #define INVALID_HANDLE   0
@@ -543,7 +544,7 @@ static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp
 }
 
 
-#define BUF_SIZE (1024)
+
 
 
 
@@ -557,61 +558,6 @@ QueueHandle_t timer_queue = NULL;
 static void enqueue_command(struct eq3cmd *newcmd);
 
 struct eq3cmd *cmdqueue = NULL;
-
-/* Task to handle local UART and accept EQ-3 commands for test/debug */
-static void uart_task()
-{
-    const int uart_num = UART_NUM_0;
-    uint8_t cmd_buf[1024] = {0};
-    uint16_t cmdidx = 0;
-
-    uart_config_t uart_config = {
-            .baud_rate = 115200,
-            .data_bits = UART_DATA_8_BITS,
-            .parity = UART_PARITY_DISABLE,
-            .stop_bits = UART_STOP_BITS_1,
-            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-            .rx_flow_ctrl_thresh = 122,
-    };
-    //Configure UART1 parameters
-    uart_param_config(uart_num, &uart_config);
-    //Set UART1 pins(TX: IO4, RX: I05, RTS: IO18, CTS: IO19)
-    //uart_set_pin(uart_num, ECHO_TEST_TXD, ECHO_TEST_RXD, ECHO_TEST_RTS, ECHO_TEST_CTS);
-    //Install UART driver (we don't need an event queue here)
-    //In this example we don't even use a buffer for sending data.
-    uart_driver_install(uart_num, BUF_SIZE * 2, 0, 0, NULL, 0);
-
-    uint8_t* data = (uint8_t*) malloc(BUF_SIZE);
-    while(1) {
-        //Read data from UART
-        int len = uart_read_bytes(uart_num, data, BUF_SIZE - 1, 20 / portTICK_RATE_MS);
-        if(cmdidx + len < 1024){
-            int cpylen = 0;
-            while(cpylen < len){
-                if(data[cpylen] == '\n' || data[cpylen] == '\r'){
-                    if(cmdidx > 0 && msgQueue != NULL){
-                        uint8_t *newMsg = (uint8_t *)malloc(cmdidx + 1);
-                        if(newMsg != NULL){
-                            memcpy(newMsg, cmd_buf, cmdidx);
-                            newMsg[cmdidx] = 0;
-                            ESP_LOGI(GATTC_TAG, "Send");
-                            xQueueSend( msgQueue, (void *)&newMsg, ( TickType_t ) 0 );
-
-                            /* TODO - check if the above failed */
-
-                        }
-                    }
-                    cmdidx = 0;
-                    cpylen++;
-                }else{
-                    cmd_buf[cmdidx++] = data[cpylen++];
-                }
-            }
-        }
-        //Write data back to UART
-        uart_write_bytes(uart_num, (const char*) data, len);
-    }
-} 
 
 /* Handle an EQ-3 command from uart or mqtt */
 int handle_request(char *cmdstr){
